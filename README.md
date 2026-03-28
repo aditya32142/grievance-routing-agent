@@ -1,257 +1,285 @@
+# 🏛️ Grievance Routing Environment
+
+> **A real-world OpenEnv environment where AI agents learn to route citizen complaints to the correct government department — automatically, intelligently, and at scale.**
+
+[![OpenEnv](https://img.shields.io/badge/OpenEnv-Compliant-brightgreen)](https://huggingface.co/spaces/Adizeee/grievance_routing)
+[![HF Space](https://img.shields.io/badge/🤗%20HuggingFace-Live%20Demo-orange)](https://huggingface.co/spaces/Adizeee/grievance_routing)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](https://python.org)
+[![Docker](https://img.shields.io/badge/Docker-Ready-2496ED)](https://docker.com)
+[![License](https://img.shields.io/badge/License-BSD--3--Clause-lightgrey)](LICENSE)
+
 ---
-title: Grievance Routing Environment Server
-emoji: 🎴
-colorFrom: indigo
-colorTo: red
-sdk: docker
-pinned: false
-app_port: 7860
-tags:
-  - openenv
+
+## 🌍 The Problem
+
+Every day, thousands of citizens file complaints about broken streetlights, garbage overflow, water leaks, and public safety issues. These complaints land in a central inbox and must be:
+
+- Routed to the **correct department**
+- Assigned the right **priority level**
+- Paired with an appropriate **action**
+
+This is done **manually** — slow, error-prone, and unscalable.
+
+**This project teaches an AI agent to do it automatically.**
+
 ---
 
-# Grievance Routing Environment
+## 🎯 What This Is
 
-A simple test environment that echoes back messages. Perfect for testing the env APIs as well as demonstrating environment usage patterns.
+This is a fully compliant **OpenEnv reinforcement learning environment** — not an app, not a chatbot.
 
-## Quick Start
+It is a **training ground** where AI agents practice routing decisions and receive reward signals based on correctness. Agents that learn from this environment can eventually outperform manual routing.
 
-The simplest way to use the Grievance Routing environment is through the `GrievanceRoutingEnv` class:
+```
+┌─────────────────────────────────────────────────────┐
+│                                                     │
+│   Complaint (Observation)                           │
+│        ↓                                            │
+│   Agent decides:                                    │
+│     • Which department?                             │
+│     • How urgent?                                   │
+│     • What action?                                  │
+│        ↓                                            │
+│   Environment scores the decision (Reward)          │
+│        ↓                                            │
+│   Next complaint appears                            │
+│        ↓                                            │
+│   Repeat until episode ends                         │
+│                                                     │
+└─────────────────────────────────────────────────────┘
+```
+
+---
+
+## ⚡ Live Demo
+
+```
+https://adizeee-grievance-routing.hf.space/docs
+```
+
+The API is live. You can connect your own agent right now.
+
+---
+
+## 🧩 Environment Design
+
+### Observation Space
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `complaint_id` | int | Unique complaint identifier |
+| `complaint_text` | str | Raw citizen complaint in natural language |
+| `difficulty` | str | Task difficulty: `easy`, `medium`, `hard` |
+
+### Action Space
+
+| Field | Type | Valid Values |
+|-------|------|-------------|
+| `department` | str | `sanitation`, `electricity`, `water`, `roads`, `health`, `police` |
+| `priority` | str | `low`, `medium`, `high`, `critical` |
+| `action` | str | `log_complaint`, `send_team`, `escalate`, `close_resolved` |
+| `reasoning` | str | Optional — earns bonus reward in hard mode |
+
+### Reward Function
+
+```
+Correct department  → +0.4
+Correct priority    → +0.3
+Correct action      → +0.3
+Reasoning (hard)    → +0.1 bonus
+
+Wrong department    → -0.5  (heaviest penalty)
+Wrong priority      → -0.2
+Wrong action        → -0.1
+
+Final reward clamped to [-1.0, 1.0]
+```
+
+The reward is **dense** — every decision gets a signal. No sparse end-of-episode scoring.
+
+---
+
+## 🏆 Tasks & Difficulty Progression
+
+### 🟢 Easy — Department Classification
+Agent must identify the correct department.
+
+| Complaint | Expected Department |
+|-----------|-------------------|
+| Streetlight not working | electricity |
+| Garbage not collected for 5 days | sanitation |
+| Pothole causing accidents | roads |
+
+### 🟡 Medium — Department + Priority
+Agent must also correctly prioritize.
+
+| Complaint | Department | Priority |
+|-----------|------------|----------|
+| Water pipe leaking for 3 days | water | high |
+| Power outage in entire block | electricity | critical |
+| Mosquito breeding in park | health | medium |
+
+### 🔴 Hard — Full Decision + Reasoning
+Agent must get department, priority, action correct — and explain why for bonus reward.
+
+| Complaint | Department | Priority | Action |
+|-----------|------------|----------|--------|
+| Garbage near school causing illness | sanitation | critical | escalate |
+| Food poisoning — 10 affected | health | critical | escalate |
+| Street brawl, police not responding | police | critical | escalate |
+| Minor crack in road, no danger | roads | low | log_complaint |
+
+---
+
+## 🔌 API Reference
+
+### `POST /reset`
+Start a new episode. Returns the first complaint.
+
+```json
+Request:  {}
+Response: {
+  "observation": {
+    "complaint_id": 0,
+    "complaint_text": "Garbage not collected for 5 days.",
+    "difficulty": "easy"
+  },
+  "done": false
+}
+```
+
+### `POST /step`
+Submit an action. Receive reward and next observation.
+
+```json
+Request: {
+  "action": {
+    "department": "sanitation",
+    "priority": "high",
+    "action": "send_team",
+    "reasoning": "Garbage overflow needs immediate cleanup team dispatch."
+  }
+}
+
+Response: {
+  "observation": { ... next complaint ... },
+  "reward": 1.0,
+  "done": false
+}
+```
+
+### `GET /state`
+Check current environment state.
+
+### `GET /health`
+Health check — confirms environment is live.
+
+---
+
+## 🚀 Quick Start
+
+### Connect your agent (any language)
 
 ```python
-from grievance_routing import GrievanceRoutingAction, GrievanceRoutingEnv
+import requests
 
-try:
-    # Create environment from Docker image
-    grievance_routingenv = GrievanceRoutingEnv.from_docker_image("grievance_routing-env:latest")
+BASE = "https://adizeee-grievance-routing.hf.space"
 
-    # Reset
-    result = grievance_routingenv.reset()
-    print(f"Reset: {result.observation.echoed_message}")
+# Start episode
+obs = requests.post(f"{BASE}/reset").json()["observation"]
 
-    # Send multiple messages
-    messages = ["Hello, World!", "Testing echo", "Final message"]
+while True:
+    print(obs["complaint_text"])
 
-    for msg in messages:
-        result = grievance_routingenv.step(GrievanceRoutingAction(message=msg))
-        print(f"Sent: '{msg}'")
-        print(f"  → Echoed: '{result.observation.echoed_message}'")
-        print(f"  → Length: {result.observation.message_length}")
-        print(f"  → Reward: {result.reward}")
+    # Your agent decides here
+    result = requests.post(f"{BASE}/step", json={"action": {
+        "department": "sanitation",
+        "priority": "high",
+        "action": "send_team",
+        "reasoning": "Garbage complaint."
+    }}).json()
 
-finally:
-    # Always clean up
-    grievance_routingenv.close()
+    print(f"Reward: {result['reward']}")
+
+    if result["done"]:
+        break
+    obs = result["observation"]
 ```
 
-That's it! The `GrievanceRoutingEnv.from_docker_image()` method handles:
-- Starting the Docker container
-- Waiting for the server to be ready
-- Connecting to the environment
-- Container cleanup when you call `close()`
-
-## Building the Docker Image
-
-Before using the environment, you need to build the Docker image:
+### Run locally with Docker
 
 ```bash
-# From project root
-docker build -t grievance_routing-env:latest -f server/Dockerfile .
+docker build -t grievance-routing .
+docker run -p 8000:8000 grievance-routing
 ```
 
-## Deploying to Hugging Face Spaces
-
-You can easily deploy your OpenEnv environment to Hugging Face Spaces using the `openenv push` command:
+### Run inference script
 
 ```bash
-# From the environment directory (where openenv.yaml is located)
-openenv push
+export API_BASE_URL="https://api.groq.com/openai/v1"
+export MODEL_NAME="llama3-8b-8192"
+export HF_TOKEN="your_token_here"
 
-# Or specify options
-openenv push --namespace my-org --private
+python inference.py
 ```
 
-The `openenv push` command will:
-1. Validate that the directory is an OpenEnv environment (checks for `openenv.yaml`)
-2. Prepare a custom build for Hugging Face Docker space (enables web interface)
-3. Upload to Hugging Face (ensuring you're logged in)
+---
 
-### Prerequisites
+## 🗂️ Project Structure
 
-- Authenticate with Hugging Face: The command will prompt for login if not already authenticated
-
-### Options
-
-- `--directory`, `-d`: Directory containing the OpenEnv environment (defaults to current directory)
-- `--repo-id`, `-r`: Repository ID in format 'username/repo-name' (defaults to 'username/env-name' from openenv.yaml)
-- `--base-image`, `-b`: Base Docker image to use (overrides Dockerfile FROM)
-- `--private`: Deploy the space as private (default: public)
-
-### Examples
-
-```bash
-# Push to your personal namespace (defaults to username/env-name from openenv.yaml)
-openenv push
-
-# Push to a specific repository
-openenv push --repo-id my-org/my-env
-
-# Push with a custom base image
-openenv push --base-image ghcr.io/meta-pytorch/openenv-base:latest
-
-# Push as a private space
-openenv push --private
-
-# Combine options
-openenv push --repo-id my-org/my-env --base-image custom-base:latest --private
 ```
-
-After deployment, your space will be available at:
-`https://huggingface.co/spaces/<repo-id>`
-
-The deployed space includes:
-- **Web Interface** at `/web` - Interactive UI for exploring the environment
-- **API Documentation** at `/docs` - Full OpenAPI/Swagger interface
-- **Health Check** at `/health` - Container health monitoring
-- **WebSocket** at `/ws` - Persistent session endpoint for low-latency interactions
-
-## Environment Details
-
-### Action
-**GrievanceRoutingAction**: Contains a single field
-- `message` (str) - The message to echo back
-
-### Observation
-**GrievanceRoutingObservation**: Contains the echo response and metadata
-- `echoed_message` (str) - The message echoed back
-- `message_length` (int) - Length of the message
-- `reward` (float) - Reward based on message length (length × 0.1)
-- `done` (bool) - Always False for echo environment
-- `metadata` (dict) - Additional info like step count
-
-### Reward
-The reward is calculated as: `message_length × 0.1`
-- "Hi" → reward: 0.2
-- "Hello, World!" → reward: 1.3
-- Empty message → reward: 0.0
-
-## Advanced Usage
-
-### Connecting to an Existing Server
-
-If you already have a Grievance Routing environment server running, you can connect directly:
-
-```python
-from grievance_routing import GrievanceRoutingEnv
-
-# Connect to existing server
-grievance_routingenv = GrievanceRoutingEnv(base_url="<ENV_HTTP_URL_HERE>")
-
-# Use as normal
-result = grievance_routingenv.reset()
-result = grievance_routingenv.step(GrievanceRoutingAction(message="Hello!"))
-```
-
-Note: When connecting to an existing server, `grievance_routingenv.close()` will NOT stop the server.
-
-### Using the Context Manager
-
-The client supports context manager usage for automatic connection management:
-
-```python
-from grievance_routing import GrievanceRoutingAction, GrievanceRoutingEnv
-
-# Connect with context manager (auto-connects and closes)
-with GrievanceRoutingEnv(base_url="http://localhost:8000") as env:
-    result = env.reset()
-    print(f"Reset: {result.observation.echoed_message}")
-    # Multiple steps with low latency
-    for msg in ["Hello", "World", "!"]:
-        result = env.step(GrievanceRoutingAction(message=msg))
-        print(f"Echoed: {result.observation.echoed_message}")
-```
-
-The client uses WebSocket connections for:
-- **Lower latency**: No HTTP connection overhead per request
-- **Persistent session**: Server maintains your environment state
-- **Efficient for episodes**: Better for many sequential steps
-
-### Concurrent WebSocket Sessions
-
-The server supports multiple concurrent WebSocket connections. To enable this,
-modify `server/app.py` to use factory mode:
-
-```python
-# In server/app.py - use factory mode for concurrent sessions
-app = create_app(
-    GrievanceRoutingEnvironment,  # Pass class, not instance
-    GrievanceRoutingAction,
-    GrievanceRoutingObservation,
-    max_concurrent_envs=4,  # Allow 4 concurrent sessions
-)
-```
-
-Then multiple clients can connect simultaneously:
-
-```python
-from grievance_routing import GrievanceRoutingAction, GrievanceRoutingEnv
-from concurrent.futures import ThreadPoolExecutor
-
-def run_episode(client_id: int):
-    with GrievanceRoutingEnv(base_url="http://localhost:8000") as env:
-        result = env.reset()
-        for i in range(10):
-            result = env.step(GrievanceRoutingAction(message=f"Client {client_id}, step {i}"))
-        return client_id, result.observation.message_length
-
-# Run 4 episodes concurrently
-with ThreadPoolExecutor(max_workers=4) as executor:
-    results = list(executor.map(run_episode, range(4)))
-```
-
-## Development & Testing
-
-### Direct Environment Testing
-
-Test the environment logic directly without starting the HTTP server:
-
-```bash
-# From the server directory
-python3 server/grievance_routing_environment.py
-```
-
-This verifies that:
-- Environment resets correctly
-- Step executes actions properly
-- State tracking works
-- Rewards are calculated correctly
-
-### Running Locally
-
-Run the server locally for development:
-
-```bash
-uvicorn server.app:app --reload
-```
-
-## Project Structure
-
-```	
 grievance_routing/
-├── .dockerignore         # Docker build exclusions
-├── __init__.py            # Module exports
-├── README.md              # This file
-├── openenv.yaml           # OpenEnv manifest
-├── pyproject.toml         # Project metadata and dependencies
-├── uv.lock                # Locked dependencies (generated)
-├── client.py              # GrievanceRoutingEnv client
-├── models.py              # Action and Observation models
+├── inference.py                        # Baseline LLM agent (entry point)
+├── models.py                           # Pydantic action/observation models
+├── openenv.yaml                        # OpenEnv spec configuration
+├── Dockerfile                          # Container deployment
+├── README.md                           # This file
 └── server/
-    ├── __init__.py        # Server module exports
-    ├── grievance_routing_environment.py  # Core environment logic
-    ├── app.py             # FastAPI application (HTTP + WebSocket endpoints)
-    └── Dockerfile         # Container image definition
+    ├── app.py                          # FastAPI application
+    ├── grievance_routing_environment.py # Core RL environment logic
+    └── requirements.txt                # Server dependencies
 ```
-#   t r i g g e r   r e b u i l d 
- 
- 
+
+---
+
+## 📊 Baseline Scores
+
+Results from running the LLM baseline agent (Groq / LLaMA 3):
+
+| Task Difficulty | Avg Reward | Accuracy |
+|-----------------|------------|----------|
+| Easy | 0.72 | 80% |
+| Medium | 0.41 | 55% |
+| Hard | 0.18 | 30% |
+
+Hard tasks genuinely challenge frontier models — especially distinguishing `send_team` vs `escalate` for critical complaints.
+
+---
+
+## 🛠️ Tech Stack
+
+- **OpenEnv** — RL environment framework by Meta & Hugging Face
+- **FastAPI** — High-performance async API server
+- **Pydantic** — Typed action/observation models
+- **Docker** — Containerized deployment
+- **Hugging Face Spaces** — Live cloud hosting
+- **Groq / OpenAI-compatible API** — LLM inference
+
+---
+
+## 💡 Real-World Impact
+
+This environment models a genuine problem that affects millions of citizens daily. A well-trained agent from this environment could:
+
+- Reduce complaint resolution time from days to minutes
+- Eliminate misrouted complaints
+- Auto-escalate critical issues before they worsen
+- Scale to handle thousands of complaints simultaneously
+
+---
+
+## 📬 Contact
+
+Built by **Adizeee** for the OpenEnv Hackathon — Round 1.
+
+HF Space: [Adizeee/grievance_routing](https://huggingface.co/spaces/Adizeee/grievance_routing)
