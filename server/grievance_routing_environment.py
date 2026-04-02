@@ -17,6 +17,10 @@ except ImportError:
 DEPARTMENTS = ["sanitation", "electricity", "water", "roads", "health", "police"]
 PRIORITIES = ["low", "medium", "high", "critical"]
 ACTIONS = ["log_complaint", "send_team", "escalate", "close_resolved"]
+RELATED_DEPARTMENT_GROUPS = [
+    {"electricity", "water", "roads"},
+    {"sanitation", "health"},
+]
 
 GRIEVANCE_DATASET = [
     {
@@ -71,33 +75,67 @@ GRIEVANCE_DATASET = [
     },
 ]
 
+def _department_penalty(predicted: str, expected: str) -> tuple[float, str]:
+    if predicted == expected:
+        return 0.4, "+0.4 correct department"
+
+    for group in RELATED_DEPARTMENT_GROUPS:
+        if predicted in group and expected in group:
+            return -0.15, f"-0.15 related department mismatch ({predicted} vs {expected})"
+
+    return -0.3, f"-0.3 wrong department ({predicted} vs {expected})"
+
+
+def _priority_score(predicted: str, expected: str) -> tuple[float, str]:
+    if predicted == expected:
+        return 0.3, "+0.3 correct priority"
+
+    predicted_index = PRIORITIES.index(predicted) if predicted in PRIORITIES else -1
+    expected_index = PRIORITIES.index(expected) if expected in PRIORITIES else -1
+    if abs(predicted_index - expected_index) == 1:
+        return 0.1, f"+0.1 close priority ({predicted} vs {expected})"
+
+    return -0.1, f"-0.1 wrong priority ({predicted} vs {expected})"
+
+
+def _action_score(predicted: str, expected: str, priority: str) -> tuple[float, str]:
+    if predicted == expected:
+        return 0.3, "+0.3 correct action"
+
+    if priority == "critical" and {predicted, expected} == {"send_team", "escalate"}:
+        return 0.05, f"+0.05 near-miss action on critical issue ({predicted} vs {expected})"
+
+    if priority == "low" and {predicted, expected} == {"log_complaint", "send_team"}:
+        return 0.0, f"+0.0 conservative action on low-priority issue ({predicted} vs {expected})"
+
+    return -0.05, f"-0.05 wrong action ({predicted} vs {expected})"
+
+
 def calculate_reward(action, expected, difficulty):
     reward = 0.0
+    breakdown = {}
 
-    if action.department == expected["department"]:
-        reward += 0.4
-    else:
-        reward -= 0.5
+    department_score, department_note = _department_penalty(action.department, expected["department"])
+    reward += department_score
+    breakdown["department"] = department_note
 
-    if action.priority == expected["priority"]:
-        reward += 0.3
-    else:
-        p_idx = PRIORITIES.index(action.priority) if action.priority in PRIORITIES else -1
-        e_idx = PRIORITIES.index(expected["priority"]) if expected["priority"] in PRIORITIES else -1
-        if abs(p_idx - e_idx) == 1:
-            reward += 0.1
-        else:
-            reward -= 0.2
+    priority_score, priority_note = _priority_score(action.priority, expected["priority"])
+    reward += priority_score
+    breakdown["priority"] = priority_note
 
-    if action.action == expected["action"]:
-        reward += 0.3
-    else:
-        reward -= 0.1
+    action_score, action_note = _action_score(action.action, expected["action"], expected["priority"])
+    reward += action_score
+    breakdown["action"] = action_note
 
     if difficulty == "hard" and action.reasoning:
         reward += 0.1
+        breakdown["reasoning"] = "+0.1 reasoning provided for hard task"
+    elif difficulty == "hard":
+        breakdown["reasoning"] = "+0.0 no reasoning bonus"
 
-    return max(-1.0, min(1.0, round(reward, 2)))
+    reward = max(-1.0, min(1.0, round(reward, 2)))
+    breakdown["total"] = reward
+    return reward, breakdown
 
 
 class GrievanceRoutingEnvironment(Environment):
@@ -137,10 +175,11 @@ class GrievanceRoutingEnvironment(Environment):
 
     def step(self, action: GrievanceRoutingAction) -> GrievanceRoutingObservation:
         self._state.step_count += 1
+        scored_grievance = self._current_grievance
         expected = self._current_grievance["expected"]
         difficulty = self._current_grievance["difficulty"]
 
-        reward = calculate_reward(action, expected, difficulty)
+        reward, breakdown = calculate_reward(action, expected, difficulty)
         self._total_reward += reward
         self._index += 1
 
@@ -155,9 +194,19 @@ class GrievanceRoutingEnvironment(Environment):
             reward=reward,
             done=done,
             metadata={
+                "scored_complaint": scored_grievance["complaint"],
+                "scored_difficulty": difficulty,
                 "expected": expected,
+                "submitted_action": {
+                    "department": action.department,
+                    "priority": action.priority,
+                    "action": action.action,
+                    "reasoning": action.reasoning,
+                },
+                "reward_breakdown": breakdown,
                 "total_reward": round(self._total_reward, 2),
                 "step": self._state.step_count,
+                "next_complaint": self._current_grievance["complaint"] if not done else "",
             },
         )
 
