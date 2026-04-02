@@ -5,8 +5,8 @@ WORKDIR /app
 # copy only needed files (cleaner build)
 COPY . /app
 
-# install dependencies
-RUN pip install --no-cache-dir fastapi uvicorn openenv
+# install runtime dependencies required by the environment server
+RUN pip install --no-cache-dir "openenv-core>=0.2.2" fastapi uvicorn openai
 
 # Hugging Face port
 EXPOSE 7860
