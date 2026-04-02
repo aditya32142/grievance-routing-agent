@@ -21,6 +21,11 @@ RELATED_DEPARTMENT_GROUPS = [
     {"electricity", "water", "roads"},
     {"sanitation", "health"},
 ]
+DIFFICULTY_TARGET_SCORES = {
+    "easy": 0.8,
+    "medium": 0.9,
+    "hard": 1.0,
+}
 
 GRIEVANCE_DATASET = [
     {
@@ -112,28 +117,33 @@ def _action_score(predicted: str, expected: str, priority: str) -> tuple[float, 
 
 
 def calculate_reward(action, expected, difficulty):
-    reward = 0.0
+    raw_reward = 0.0
     breakdown = {}
 
     department_score, department_note = _department_penalty(action.department, expected["department"])
-    reward += department_score
+    raw_reward += department_score
     breakdown["department"] = department_note
 
     priority_score, priority_note = _priority_score(action.priority, expected["priority"])
-    reward += priority_score
+    raw_reward += priority_score
     breakdown["priority"] = priority_note
 
     action_score, action_note = _action_score(action.action, expected["action"], expected["priority"])
-    reward += action_score
+    raw_reward += action_score
     breakdown["action"] = action_note
 
+    max_raw_reward = 1.0
     if difficulty == "hard" and action.reasoning:
-        reward += 0.1
+        raw_reward += 0.1
         breakdown["reasoning"] = "+0.1 reasoning provided for hard task"
+        max_raw_reward = 1.1
     elif difficulty == "hard":
         breakdown["reasoning"] = "+0.0 no reasoning bonus"
 
-    reward = max(-1.0, min(1.0, round(reward, 2)))
+    target_score = DIFFICULTY_TARGET_SCORES.get(difficulty, 1.0)
+    reward = max(0.0, round((max(raw_reward, 0.0) / max_raw_reward) * target_score, 2))
+    breakdown["raw_total"] = round(raw_reward, 2)
+    breakdown["target_score"] = target_score
     breakdown["total"] = reward
     return reward, breakdown
 

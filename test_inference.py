@@ -101,6 +101,11 @@ TEST_CASES = [
 ]
 
 PRIORITIES = ["low", "medium", "high", "critical"]
+DIFFICULTY_TARGET_SCORES = {
+    "easy": 0.8,
+    "medium": 0.9,
+    "hard": 1.0,
+}
 
 
 def choose_silently(complaint: str):
@@ -110,44 +115,47 @@ def choose_silently(complaint: str):
 
 def score_decision(action, expected, difficulty: str) -> float:
     # Mirrors the active server reward function in server/grievance_routing_environment.py.
-    reward = 0.0
+    raw_reward = 0.0
 
     if action["department"] == expected["department"]:
-        reward += 0.4
+        raw_reward += 0.4
     else:
         related_groups = [
             {"electricity", "water", "roads"},
             {"sanitation", "health"},
         ]
         if any(action["department"] in group and expected["department"] in group for group in related_groups):
-            reward -= 0.15
+            raw_reward -= 0.15
         else:
-            reward -= 0.3
+            raw_reward -= 0.3
 
     if action["priority"] == expected["priority"]:
-        reward += 0.3
+        raw_reward += 0.3
     else:
         action_idx = PRIORITIES.index(action["priority"]) if action["priority"] in PRIORITIES else -1
         expected_idx = PRIORITIES.index(expected["priority"]) if expected["priority"] in PRIORITIES else -1
         if abs(action_idx - expected_idx) == 1:
-            reward += 0.1
+            raw_reward += 0.1
         else:
-            reward -= 0.1
+            raw_reward -= 0.1
 
     if action["action"] == expected["action"]:
-        reward += 0.3
+        raw_reward += 0.3
     else:
         if expected["priority"] == "critical" and {action["action"], expected["action"]} == {"send_team", "escalate"}:
-            reward += 0.05
+            raw_reward += 0.05
         elif expected["priority"] == "low" and {action["action"], expected["action"]} == {"log_complaint", "send_team"}:
-            reward += 0.0
+            raw_reward += 0.0
         else:
-            reward -= 0.05
+            raw_reward -= 0.05
 
+    max_raw_reward = 1.0
     if difficulty == "hard" and action.get("reasoning"):
-        reward += 0.1
+        raw_reward += 0.1
+        max_raw_reward = 1.1
 
-    return max(-1.0, min(1.0, round(reward, 2)))
+    target_score = DIFFICULTY_TARGET_SCORES.get(difficulty, 1.0)
+    return max(0.0, round((max(raw_reward, 0.0) / max_raw_reward) * target_score, 2))
 
 
 class InferenceRegressionTests(unittest.TestCase):
@@ -166,7 +174,7 @@ class InferenceRegressionTests(unittest.TestCase):
             decision = choose_silently(case["complaint"])
             total_reward += score_decision(decision, case["expected"], case["difficulty"])
 
-        self.assertEqual(total_reward, 10.0)
+        self.assertAlmostEqual(total_reward, 9.1, places=2)
 
     def test_related_department_mismatch_is_not_over_penalized(self):
         reward = score_decision(
@@ -174,7 +182,25 @@ class InferenceRegressionTests(unittest.TestCase):
             {"department": "roads", "priority": "high", "action": "send_team"},
             "easy",
         )
-        self.assertEqual(reward, 0.45)
+        self.assertEqual(reward, 0.36)
+
+    def test_perfect_rewards_vary_by_difficulty(self):
+        easy_reward = score_decision(
+            {"department": "sanitation", "priority": "high", "action": "send_team", "reasoning": "ok"},
+            {"department": "sanitation", "priority": "high", "action": "send_team"},
+            "easy",
+        )
+        medium_reward = score_decision(
+            {"department": "water", "priority": "high", "action": "send_team", "reasoning": "ok"},
+            {"department": "water", "priority": "high", "action": "send_team"},
+            "medium",
+        )
+        hard_reward = score_decision(
+            {"department": "police", "priority": "critical", "action": "escalate", "reasoning": "ok"},
+            {"department": "police", "priority": "critical", "action": "escalate"},
+            "hard",
+        )
+        self.assertEqual((easy_reward, medium_reward, hard_reward), (0.8, 0.9, 1.0))
 
     def test_environment_metadata_includes_scored_complaint_and_breakdown(self):
         env = GrievanceRoutingEnvironment()

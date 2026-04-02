@@ -11,6 +11,7 @@ import asyncio
 import json
 import os
 import re
+import sys
 from typing import Any, Dict, List, Optional
 
 from openai import OpenAI
@@ -34,6 +35,12 @@ TEMPERATURE = float(os.getenv("TEMPERATURE", "0"))
 MAX_TOKENS = int(os.getenv("MAX_TOKENS", "200"))
 SUCCESS_SCORE_THRESHOLD = float(os.getenv("SUCCESS_SCORE_THRESHOLD", "0.75"))
 MAX_TOTAL_REWARD = float(os.getenv("MAX_TOTAL_REWARD", "10.0"))
+HUMAN_LOGS = os.getenv("HUMAN_LOGS", "0").lower() in {"1", "true", "yes"}
+DIFFICULTY_TARGET_SCORES = {
+    "easy": 0.8,
+    "medium": 0.9,
+    "hard": 1.0,
+}
 
 SYSTEM_PROMPT = (
     "You route public grievances for a decentralized government complaint system. "
@@ -64,6 +71,11 @@ def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> No
         f"[END] success={str(success).lower()} steps={steps} score={score:.3f} rewards={rewards_str}",
         flush=True,
     )
+
+
+def human_log(message: str) -> None:
+    if HUMAN_LOGS:
+        print(message, file=sys.stderr, flush=True)
 
 
 def _has_any(text: str, *tokens: str) -> bool:
@@ -240,6 +252,10 @@ def parse_error(observation: Any) -> Optional[str]:
     return None
 
 
+def target_reward_for_difficulty(difficulty: str) -> float:
+    return DIFFICULTY_TARGET_SCORES.get(difficulty, 1.0)
+
+
 async def create_env() -> GrievanceRoutingEnv:
     if LOCAL_IMAGE_NAME:
         return await GrievanceRoutingEnv.from_docker_image(LOCAL_IMAGE_NAME)
@@ -253,6 +269,7 @@ async def main() -> None:
     client = OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN or "")
     env: Optional[GrievanceRoutingEnv] = None
     rewards: List[float] = []
+    max_rewards: List[float] = []
     steps_taken = 0
     score = 0.0
     success = False
@@ -271,6 +288,7 @@ async def main() -> None:
                 observation = result.observation
                 complaint = observation.complaint_text
                 difficulty = observation.difficulty or "easy"
+                max_rewards.append(target_reward_for_difficulty(difficulty))
                 action_payload = choose_action(
                     complaint=complaint,
                     difficulty=difficulty,
@@ -307,6 +325,17 @@ async def main() -> None:
                     done=done,
                     error=error,
                 )
+                metadata = getattr(result.observation, "metadata", {}) or {}
+                if isinstance(metadata, dict):
+                    scored_complaint = metadata.get("scored_complaint", complaint)
+                    breakdown = metadata.get("reward_breakdown", {})
+                    human_log(f"Complaint: {scored_complaint}")
+                    human_log(f"Decision: {action_payload}")
+                    human_log(f"Reward breakdown: {breakdown}")
+                    next_complaint = metadata.get("next_complaint")
+                    if next_complaint:
+                        human_log(f"Next complaint: {next_complaint}")
+                human_log("-" * 40)
 
                 if done:
                     break
@@ -314,7 +343,8 @@ async def main() -> None:
             pass
 
         if rewards:
-            score = min(max(sum(rewards) / MAX_TOTAL_REWARD, 0.0), 1.0)
+            denominator = sum(max_rewards) if max_rewards else MAX_TOTAL_REWARD
+            score = min(max(sum(rewards) / denominator, 0.0), 1.0)
         success = score >= SUCCESS_SCORE_THRESHOLD
     finally:
         if env is not None:
