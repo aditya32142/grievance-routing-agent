@@ -25,7 +25,7 @@ except ImportError:
 
 LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME") or os.getenv("IMAGE_NAME")
 ENV_URL = os.getenv("ENV_URL", "https://adizeee-grievance-routing.hf.space")
-API_BASE_URL = os.getenv("API_BASE_URL")
+API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
 API_KEY = os.getenv("API_KEY")
 MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
 TASK_NAME = os.getenv("GRIEVANCE_ROUTING_TASK", "full-routing")
@@ -289,8 +289,8 @@ async def create_env() -> GrievanceRoutingEnv:
 
 
 async def main() -> None:
-    client = create_llm_client_from_env(require=True)
     env: Optional[GrievanceRoutingEnv] = None
+    client: Optional[OpenAI] = None
     rewards: List[float] = []
     max_rewards: List[float] = []
     steps_taken = 0
@@ -300,47 +300,34 @@ async def main() -> None:
     log_start(task=TASK_NAME, env=BENCHMARK, model=MODEL_NAME)
 
     try:
-        try:
-            env = await create_env()
-            result = await env.reset()
+        client = create_llm_client_from_env(require=True)
+        env = await create_env()
+        result = await env.reset()
 
-            for step in range(1, MAX_STEPS + 1):
-                if result.done:
-                    break
+        for step in range(1, MAX_STEPS + 1):
+            if result.done:
+                break
 
-                observation = result.observation
-                complaint = observation.complaint_text
-                difficulty = observation.difficulty or "easy"
-                max_rewards.append(target_reward_for_difficulty(difficulty))
-                action_payload = choose_action(
-                    complaint=complaint,
-                    difficulty=difficulty,
-                    client=client,
-                )
-                action = GrievanceRoutingAction(**action_payload)
+            observation = result.observation
+            complaint = observation.complaint_text
+            difficulty = observation.difficulty or "easy"
+            max_rewards.append(target_reward_for_difficulty(difficulty))
+            action_payload = choose_action(
+                complaint=complaint,
+                difficulty=difficulty,
+                client=client,
+            )
+            action = GrievanceRoutingAction(**action_payload)
 
-                try:
-                    result = await env.step(action)
-                    reward = float(result.reward or 0.0)
-                    done = bool(result.done)
-                    error = parse_error(result.observation)
-                except Exception as exc:
-                    reward = 0.0
-                    done = True
-                    error = str(exc).replace("\n", " ")
-                    log_step(
-                        step=step,
-                        action=format_action_for_log(action_payload),
-                        reward=reward,
-                        done=done,
-                        error=error,
-                    )
-                    steps_taken = step
-                    rewards.append(reward)
-                    break
-
-                rewards.append(reward)
-                steps_taken = step
+            try:
+                result = await env.step(action)
+                reward = float(result.reward or 0.0)
+                done = bool(result.done)
+                error = parse_error(result.observation)
+            except Exception as exc:
+                reward = 0.0
+                done = True
+                error = str(exc).replace("\n", " ")
                 log_step(
                     step=step,
                     action=format_action_for_log(action_payload),
@@ -348,28 +335,40 @@ async def main() -> None:
                     done=done,
                     error=error,
                 )
-                metadata = getattr(result.observation, "metadata", {}) or {}
-                if isinstance(metadata, dict):
-                    scored_complaint = metadata.get("scored_complaint", complaint)
-                    breakdown = metadata.get("reward_breakdown", {})
-                    human_log(f"Complaint: {scored_complaint}")
-                    human_log(f"Decision: {action_payload}")
-                    human_log(f"Reward breakdown: {breakdown}")
-                    next_complaint = metadata.get("next_complaint")
-                    if next_complaint:
-                        human_log(f"Next complaint: {next_complaint}")
-                human_log("-" * 40)
+                steps_taken = step
+                rewards.append(reward)
+                break
 
-                if done:
-                    break
-        except Exception:
-            pass
+            rewards.append(reward)
+            steps_taken = step
+            log_step(
+                step=step,
+                action=format_action_for_log(action_payload),
+                reward=reward,
+                done=done,
+                error=error,
+            )
+            metadata = getattr(result.observation, "metadata", {}) or {}
+            if isinstance(metadata, dict):
+                scored_complaint = metadata.get("scored_complaint", complaint)
+                breakdown = metadata.get("reward_breakdown", {})
+                human_log(f"Complaint: {scored_complaint}")
+                human_log(f"Decision: {action_payload}")
+                human_log(f"Reward breakdown: {breakdown}")
+                next_complaint = metadata.get("next_complaint")
+                if next_complaint:
+                    human_log(f"Next complaint: {next_complaint}")
+            human_log("-" * 40)
 
+            if done:
+                break
+    except Exception as exc:
+        human_log(f"Fatal inference error: {exc}")
+    finally:
         if rewards:
             denominator = sum(max_rewards) if max_rewards else MAX_TOTAL_REWARD
             score = min(max(sum(rewards) / denominator, 0.0), 1.0)
         success = score >= SUCCESS_SCORE_THRESHOLD
-    finally:
         if env is not None:
             try:
                 await env.close()
