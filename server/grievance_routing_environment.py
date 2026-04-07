@@ -3,11 +3,12 @@ Grievance Routing Environment Implementation.
 An RL environment where an agent learns to route citizen complaints
 to the correct government department.
 """
+import copy
 from uuid import uuid4
 from openenv.core.env_server.interfaces import Environment
 from openenv.core.env_server.types import State
 import random
-from typing import Optional
+from typing import Dict, List, Optional
 
 try:
     from ..models import GrievanceRoutingAction, GrievanceRoutingObservation
@@ -26,6 +27,7 @@ DIFFICULTY_TARGET_SCORES = {
     "medium": 0.9,
     "hard": 1.0,
 }
+SCORE_EPSILON = 0.01
 
 GRIEVANCE_DATASET = [
     {
@@ -79,6 +81,26 @@ GRIEVANCE_DATASET = [
         "expected": {"department": "roads", "priority": "low", "action": "log_complaint"},
     },
 ]
+
+TASK_CONFIGS = {
+    "easy-routing": {
+        "difficulty": "easy",
+        "description": "Route straightforward civic complaints to the right department.",
+    },
+    "medium-routing": {
+        "difficulty": "medium",
+        "description": "Route complaints while also assigning the right urgency level.",
+    },
+    "hard-routing": {
+        "difficulty": "hard",
+        "description": "Handle full routing with escalation behavior and reasoning-sensitive scoring.",
+    },
+}
+
+
+def _score_in_open_interval(score: float) -> float:
+    bounded = min(max(score, SCORE_EPSILON), 1.0 - SCORE_EPSILON)
+    return round(bounded, 2)
 
 def _department_penalty(predicted: str, expected: str) -> tuple[float, str]:
     if predicted == expected:
@@ -141,11 +163,76 @@ def calculate_reward(action, expected, difficulty):
         breakdown["reasoning"] = "+0.0 no reasoning bonus"
 
     target_score = DIFFICULTY_TARGET_SCORES.get(difficulty, 1.0)
-    reward = max(0.0, round((max(raw_reward, 0.0) / max_raw_reward) * target_score, 2))
+    normalized = (max(raw_reward, 0.0) / max_raw_reward) * target_score
+    reward = _score_in_open_interval(normalized)
     breakdown["raw_total"] = round(raw_reward, 2)
     breakdown["target_score"] = target_score
     breakdown["total"] = reward
     return reward, breakdown
+
+
+def _expected_action_payload(case: Dict) -> GrievanceRoutingAction:
+    expected = case["expected"]
+    reasoning = f"Reference grader action for {case['difficulty']} complaint."
+    return GrievanceRoutingAction(
+        department=expected["department"],
+        priority=expected["priority"],
+        action=expected["action"],
+        reasoning=reasoning,
+    )
+
+
+def _task_cases(task_id: str) -> List[Dict]:
+    if task_id not in TASK_CONFIGS:
+        raise KeyError(task_id)
+
+    difficulty = TASK_CONFIGS[task_id]["difficulty"]
+    return [copy.deepcopy(case) for case in GRIEVANCE_DATASET if case["difficulty"] == difficulty]
+
+
+def list_available_tasks() -> List[Dict[str, object]]:
+    tasks = []
+    for task_id, config in TASK_CONFIGS.items():
+        cases = _task_cases(task_id)
+        tasks.append(
+            {
+                "id": task_id,
+                "difficulty": config["difficulty"],
+                "description": config["description"],
+                "num_complaints": len(cases),
+                "grader": True,
+            }
+        )
+    return tasks
+
+
+def grade_task(task_id: str) -> Dict[str, object]:
+    cases = _task_cases(task_id)
+    rewards = []
+    breakdown = []
+
+    for case in cases:
+        action = _expected_action_payload(case)
+        reward, reward_breakdown = calculate_reward(action, case["expected"], case["difficulty"])
+        rewards.append(reward)
+        breakdown.append(
+            {
+                "complaint": case["complaint"],
+                "difficulty": case["difficulty"],
+                "reward": reward,
+                "reward_breakdown": reward_breakdown,
+            }
+        )
+
+    score = _score_in_open_interval(sum(rewards) / len(rewards)) if rewards else 0.5
+    return {
+        "task_id": task_id,
+        "difficulty": TASK_CONFIGS[task_id]["difficulty"],
+        "score": score,
+        "num_complaints": len(cases),
+        "grader": "deterministic_reference_grader",
+        "breakdown": breakdown,
+    }
 
 
 class GrievanceRoutingEnvironment(Environment):

@@ -4,4 +4,15 @@ type: space
 runtime: fastapi
 app: server.app:app
 port: 8000
-
+version: "1.1.0"
+description: Public grievance routing environment with explicit easy, medium, and hard graded tasks.
+reward:
+  type: shaped
+  description: Partial-credit routing reward with department, priority, action, and reasoning components.
+endpoints:
+  reset: POST /reset
+  step: POST /step
+  state: GET /state
+  tasks: GET /tasks
+  grade: GET /grade/{task_id}
+  validate: GET /validate

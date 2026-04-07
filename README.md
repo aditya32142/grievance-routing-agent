@@ -50,6 +50,12 @@ This is not a chatbot or demo app. It is an OpenEnv simulation designed for trai
 - `medium`: department plus urgency
 - `hard`: full routing decision with escalation behavior and reasoning bonus
 
+The environment also exposes these tiers as explicit graded tasks through the API:
+
+- `easy-routing`
+- `medium-routing`
+- `hard-routing`
+
 Representative examples:
 
 | Complaint | Expected output |
@@ -124,6 +130,18 @@ Returns the current OpenEnv state.
 ### `GET /health`
 
 Health endpoint for deployment checks.
+
+### `GET /tasks`
+
+Lists the three graded tasks available to the validator.
+
+### `GET /grade/{task_id}`
+
+Runs the deterministic grader for one named task and returns a score strictly between `0` and `1`.
+
+### `GET /validate`
+
+Returns a compact validation summary for task count, grader availability, and score ranges.
 
 ## Running Locally
 

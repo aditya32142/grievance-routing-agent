@@ -5,7 +5,11 @@ from contextlib import redirect_stdout
 from unittest.mock import MagicMock, patch
 
 from inference import choose_action, create_llm_client_from_env
-from server.grievance_routing_environment import GrievanceRoutingEnvironment
+from server.grievance_routing_environment import (
+    GrievanceRoutingEnvironment,
+    grade_task,
+    list_available_tasks,
+)
 from models import GrievanceRoutingAction
 
 
@@ -277,6 +281,20 @@ class InferenceRegressionTests(unittest.TestCase):
 
         _, kwargs = fake_client.chat.completions.create.call_args
         self.assertEqual(kwargs["timeout"], 30)
+
+    def test_task_catalog_exposes_three_graded_tasks(self):
+        tasks = list_available_tasks()
+
+        self.assertGreaterEqual(len(tasks), 3)
+        self.assertEqual({task["difficulty"] for task in tasks}, {"easy", "medium", "hard"})
+        self.assertTrue(all(task["grader"] for task in tasks))
+
+    def test_task_grader_scores_stay_strictly_between_zero_and_one(self):
+        for task_id in ("easy-routing", "medium-routing", "hard-routing"):
+            with self.subTest(task_id=task_id):
+                result = grade_task(task_id)
+                self.assertGreater(result["score"], 0.0)
+                self.assertLess(result["score"], 1.0)
 
 
 if __name__ == "__main__":
