@@ -25,9 +25,9 @@ except ImportError:
 
 LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME") or os.getenv("IMAGE_NAME")
 ENV_URL = os.getenv("ENV_URL", "https://adizeee-grievance-routing.hf.space")
-API_BASE_URL = os.getenv("API_BASE_URL", "https://api.groq.com/openai/v1")
-MODEL_NAME = os.getenv("MODEL_NAME", "llama-3.1-8b-instant")
-HF_TOKEN = os.getenv("HF_TOKEN") or os.getenv("API_KEY") or os.getenv("GROQ_API_KEY")
+API_BASE_URL = os.getenv("API_BASE_URL")
+API_KEY = os.getenv("API_KEY")
+MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
 TASK_NAME = os.getenv("GRIEVANCE_ROUTING_TASK", "full-routing")
 BENCHMARK = os.getenv("GRIEVANCE_ROUTING_BENCHMARK", "grievance_routing")
 MAX_STEPS = int(os.getenv("MAX_STEPS", "16"))
@@ -176,8 +176,26 @@ def _extract_json_object(text: str) -> Optional[Dict[str, Any]]:
     return parsed if isinstance(parsed, dict) else None
 
 
+def create_llm_client_from_env(require: bool = False) -> Optional[OpenAI]:
+    if API_BASE_URL and API_KEY:
+        return OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+
+    if require:
+        missing = []
+        if not API_BASE_URL:
+            missing.append("API_BASE_URL")
+        if not API_KEY:
+            missing.append("API_KEY")
+        raise RuntimeError(
+            "Missing required LLM proxy environment variable(s): "
+            + ", ".join(missing)
+        )
+
+    return None
+
+
 def ask_llm(client: Optional[OpenAI], complaint: str, difficulty: str) -> Optional[Dict[str, Any]]:
-    if client is None or not HF_TOKEN:
+    if client is None:
         return None
 
     prompt = (
@@ -195,9 +213,11 @@ def ask_llm(client: Optional[OpenAI], complaint: str, difficulty: str) -> Option
             ],
             temperature=TEMPERATURE,
             max_tokens=MAX_TOKENS,
+            timeout=30,
             stream=False,
         )
-    except Exception:
+    except Exception as exc:
+        human_log(f"LLM request failed: {exc}")
         return None
 
     content = (response.choices[0].message.content or "").strip()
@@ -228,6 +248,9 @@ def choose_action(
     difficulty: str = "easy",
     client: Optional[OpenAI] = None,
 ) -> Dict[str, str]:
+    if client is None:
+        client = create_llm_client_from_env(require=False)
+
     llm_decision = ask_llm(client, complaint, difficulty)
     return normalize_decision(complaint, llm_decision)
 
@@ -266,7 +289,7 @@ async def create_env() -> GrievanceRoutingEnv:
 
 
 async def main() -> None:
-    client = OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN or "")
+    client = create_llm_client_from_env(require=True)
     env: Optional[GrievanceRoutingEnv] = None
     rewards: List[float] = []
     max_rewards: List[float] = []

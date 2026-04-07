@@ -1,8 +1,10 @@
 import io
+import os
 import unittest
 from contextlib import redirect_stdout
+from unittest.mock import MagicMock, patch
 
-from inference import choose_action
+from inference import choose_action, create_llm_client_from_env
 from server.grievance_routing_environment import GrievanceRoutingEnvironment
 from models import GrievanceRoutingAction
 
@@ -233,6 +235,48 @@ class InferenceRegressionTests(unittest.TestCase):
         self.assertEqual(result.metadata["next_complaint"], "Streetlight not working near Main Street.")
         self.assertIn("reward_breakdown", result.metadata)
         self.assertIn("submitted_action", result.metadata)
+
+    def test_create_llm_client_uses_required_proxy_env_vars(self):
+        with patch("inference.API_BASE_URL", "https://proxy.example/v1"):
+            with patch("inference.API_KEY", "proxy-key"):
+                with patch("inference.OpenAI") as mock_openai:
+                    create_llm_client_from_env(require=True)
+
+        mock_openai.assert_called_once_with(
+            base_url="https://proxy.example/v1",
+            api_key="proxy-key",
+        )
+
+    def test_create_llm_client_requires_proxy_env_vars_when_requested(self):
+        with patch("inference.API_BASE_URL", None):
+            with patch("inference.API_KEY", None):
+                with self.assertRaises(RuntimeError):
+                    create_llm_client_from_env(require=True)
+
+    def test_choose_action_builds_client_from_proxy_env_when_missing(self):
+        fake_client = MagicMock()
+
+        with patch("inference.API_BASE_URL", "https://proxy.example/v1"):
+            with patch("inference.API_KEY", "proxy-key"):
+                with patch("inference.create_llm_client_from_env", return_value=fake_client) as mock_create_client:
+                    with patch("inference.ask_llm", return_value=None) as mock_ask_llm:
+                        choose_action("Streetlight not working near Main Street.")
+
+        mock_create_client.assert_called_once_with(require=False)
+        mock_ask_llm.assert_called_once_with(fake_client, "Streetlight not working near Main Street.", "easy")
+
+    def test_llm_call_uses_timeout(self):
+        fake_client = MagicMock()
+        fake_response = MagicMock()
+        fake_response.choices = [MagicMock(message=MagicMock(content='{"department":"roads","priority":"medium","action":"send_team","reasoning":"ok"}'))]
+        fake_client.chat.completions.create.return_value = fake_response
+
+        from inference import ask_llm
+
+        ask_llm(fake_client, "Pothole on Highway 9 causing accidents.", "easy")
+
+        _, kwargs = fake_client.chat.completions.create.call_args
+        self.assertEqual(kwargs["timeout"], 30)
 
 
 if __name__ == "__main__":
