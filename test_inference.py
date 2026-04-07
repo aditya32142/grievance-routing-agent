@@ -4,7 +4,7 @@ import unittest
 from contextlib import redirect_stdout
 from unittest.mock import MagicMock, patch
 
-from inference import choose_action, create_llm_client_from_env
+from inference import choose_action, create_llm_client_from_env, get_model_name
 from server.grievance_routing_environment import (
     GrievanceRoutingEnvironment,
     grade_task,
@@ -241,10 +241,9 @@ class InferenceRegressionTests(unittest.TestCase):
         self.assertIn("submitted_action", result.metadata)
 
     def test_create_llm_client_uses_required_proxy_env_vars(self):
-        with patch("inference.API_BASE_URL", "https://proxy.example/v1"):
-            with patch("inference.API_KEY", "proxy-key"):
-                with patch("inference.OpenAI") as mock_openai:
-                    create_llm_client_from_env(require=True)
+        with patch.dict(os.environ, {"API_BASE_URL": "https://proxy.example/v1", "API_KEY": "proxy-key"}, clear=False):
+            with patch("inference.OpenAI") as mock_openai:
+                create_llm_client_from_env(require=True)
 
         mock_openai.assert_called_once_with(
             base_url="https://proxy.example/v1",
@@ -252,19 +251,21 @@ class InferenceRegressionTests(unittest.TestCase):
         )
 
     def test_create_llm_client_requires_proxy_env_vars_when_requested(self):
-        with patch("inference.API_BASE_URL", None):
-            with patch("inference.API_KEY", None):
-                with self.assertRaises(RuntimeError):
-                    create_llm_client_from_env(require=True)
+        env_without_proxy = dict(os.environ)
+        env_without_proxy.pop("API_BASE_URL", None)
+        env_without_proxy.pop("API_KEY", None)
+
+        with patch.dict(os.environ, env_without_proxy, clear=True):
+            with self.assertRaises(RuntimeError):
+                create_llm_client_from_env(require=True)
 
     def test_choose_action_builds_client_from_proxy_env_when_missing(self):
         fake_client = MagicMock()
 
-        with patch("inference.API_BASE_URL", "https://proxy.example/v1"):
-            with patch("inference.API_KEY", "proxy-key"):
-                with patch("inference.create_llm_client_from_env", return_value=fake_client) as mock_create_client:
-                    with patch("inference.ask_llm", return_value=None) as mock_ask_llm:
-                        choose_action("Streetlight not working near Main Street.")
+        with patch.dict(os.environ, {"API_BASE_URL": "https://proxy.example/v1", "API_KEY": "proxy-key"}, clear=False):
+            with patch("inference.create_llm_client_from_env", return_value=fake_client) as mock_create_client:
+                with patch("inference.ask_llm", return_value=None) as mock_ask_llm:
+                    choose_action("Streetlight not working near Main Street.")
 
         mock_create_client.assert_called_once_with(require=False)
         mock_ask_llm.assert_called_once_with(fake_client, "Streetlight not working near Main Street.", "easy")
@@ -281,6 +282,10 @@ class InferenceRegressionTests(unittest.TestCase):
 
         _, kwargs = fake_client.chat.completions.create.call_args
         self.assertEqual(kwargs["timeout"], 30)
+
+    def test_model_name_is_read_from_environment_dynamically(self):
+        with patch.dict(os.environ, {"MODEL_NAME": "proxy-model"}, clear=False):
+            self.assertEqual(get_model_name(), "proxy-model")
 
     def test_task_catalog_exposes_three_graded_tasks(self):
         tasks = list_available_tasks()

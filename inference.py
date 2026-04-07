@@ -25,9 +25,6 @@ except ImportError:
 
 LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME") or os.getenv("IMAGE_NAME")
 ENV_URL = os.getenv("ENV_URL", "https://adizeee-grievance-routing.hf.space")
-API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
-API_KEY = os.getenv("API_KEY")
-MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
 TASK_NAME = os.getenv("GRIEVANCE_ROUTING_TASK", "full-routing")
 BENCHMARK = os.getenv("GRIEVANCE_ROUTING_BENCHMARK", "grievance_routing")
 MAX_STEPS = int(os.getenv("MAX_STEPS", "16"))
@@ -50,6 +47,10 @@ SYSTEM_PROMPT = (
     "Use one of these actions: log_complaint, send_team, escalate. "
     "Return only JSON."
 )
+
+
+def get_model_name() -> str:
+    return os.environ.get("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
 
 
 def log_start(task: str, env: str, model: str) -> None:
@@ -177,21 +178,23 @@ def _extract_json_object(text: str) -> Optional[Dict[str, Any]]:
 
 
 def create_llm_client_from_env(require: bool = False) -> Optional[OpenAI]:
-    if API_BASE_URL and API_KEY:
-        return OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
-
-    if require:
-        missing = []
-        if not API_BASE_URL:
-            missing.append("API_BASE_URL")
-        if not API_KEY:
-            missing.append("API_KEY")
-        raise RuntimeError(
-            "Missing required LLM proxy environment variable(s): "
-            + ", ".join(missing)
+    try:
+        return OpenAI(
+            base_url=os.environ["API_BASE_URL"],
+            api_key=os.environ["API_KEY"],
         )
-
-    return None
+    except KeyError:
+        if require:
+            missing = []
+            if "API_BASE_URL" not in os.environ:
+                missing.append("API_BASE_URL")
+            if "API_KEY" not in os.environ:
+                missing.append("API_KEY")
+            raise RuntimeError(
+                "Missing required LLM proxy environment variable(s): "
+                + ", ".join(missing)
+            )
+        return None
 
 
 def ask_llm(client: Optional[OpenAI], complaint: str, difficulty: str) -> Optional[Dict[str, Any]]:
@@ -206,7 +209,7 @@ def ask_llm(client: Optional[OpenAI], complaint: str, difficulty: str) -> Option
 
     try:
         response = client.chat.completions.create(
-            model=MODEL_NAME,
+            model=get_model_name(),
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": prompt},
@@ -297,7 +300,7 @@ async def main() -> None:
     score = 0.0
     success = False
 
-    log_start(task=TASK_NAME, env=BENCHMARK, model=MODEL_NAME)
+    log_start(task=TASK_NAME, env=BENCHMARK, model=get_model_name())
 
     try:
         client = create_llm_client_from_env(require=True)
