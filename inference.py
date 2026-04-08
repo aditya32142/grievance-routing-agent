@@ -185,21 +185,15 @@ def _extract_json_object(text: str) -> Optional[Dict[str, Any]]:
 
 
 def create_llm_client_from_env(require: bool = False) -> Optional[OpenAI]:
-    base_url = os.getenv("API_BASE_URL", "https://api.openai.com/v1")
-    api_key = os.getenv("API_KEY") or os.getenv("HF_TOKEN")
+    # Use exactly the env vars the hackathon validator injects — no defaults, no fallbacks.
+    base_url = os.environ["API_BASE_URL"]
+    api_key  = os.environ["API_KEY"]
 
-    if api_key:
-        human_log(f"[LLM_CLIENT] Connecting to proxy: {base_url}")
-        return OpenAI(
-            base_url=base_url,
-            api_key=api_key,
-        )
-
-    if require:
-        raise RuntimeError(
-            "Missing required LLM proxy environment variable(s): API_KEY or HF_TOKEN"
-        )
-    return None
+    human_log(f"[LLM_CLIENT] Connecting to proxy: {base_url}")
+    return OpenAI(
+        base_url=base_url,
+        api_key=api_key,
+    )
 
 
 def ask_llm(client: Optional[OpenAI], complaint: str, difficulty: str) -> Optional[Dict[str, Any]]:
@@ -229,7 +223,6 @@ def ask_llm(client: Optional[OpenAI], complaint: str, difficulty: str) -> Option
             stream=False,
         )
     except Exception as exc:
-        # FIX 2: raise instead of silent fallback so the error is visible
         print(f"[LLM_ERROR] Request failed: {exc}", file=sys.stderr, flush=True)
         raise
 
