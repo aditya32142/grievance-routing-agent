@@ -39,18 +39,22 @@ DIFFICULTY_TARGET_SCORES = {
     "hard": 1.0,
 }
 
+VALID_DEPARTMENTS = {"sanitation", "electricity", "water", "roads", "health", "police"}
+VALID_PRIORITIES = {"low", "medium", "high", "critical"}
+VALID_ACTIONS = {"log_complaint", "send_team", "escalate"}
+
 SYSTEM_PROMPT = (
     "You route public grievances for a decentralized government complaint system. "
     "Read the complaint and return JSON with keys department, priority, action, and reasoning. "
     "Use one of these departments: sanitation, electricity, water, roads, health, police. "
     "Use one of these priorities: low, medium, high, critical. "
     "Use one of these actions: log_complaint, send_team, escalate. "
-    "Return only JSON."
+    "Return only JSON, no extra text, no markdown."
 )
 
 
 def get_model_name() -> str:
-    return os.environ.get("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
+    return os.environ.get("MODEL_NAME", "gpt-4o-mini")
 
 
 def log_start(task: str, env: str, model: str) -> None:
@@ -165,6 +169,9 @@ def infer_rule_based_decision(complaint: str) -> Dict[str, str]:
 
 
 def _extract_json_object(text: str) -> Optional[Dict[str, Any]]:
+    # Strip markdown code fences if present
+    text = re.sub(r"```(?:json)?", "", text).strip()
+
     match = re.search(r"\{.*\}", text, re.DOTALL)
     if not match:
         return None
@@ -179,9 +186,12 @@ def _extract_json_object(text: str) -> Optional[Dict[str, Any]]:
 
 def create_llm_client_from_env(require: bool = False) -> Optional[OpenAI]:
     try:
+        base_url = os.environ["API_BASE_URL"]
+        api_key = os.environ["API_KEY"]
+        human_log(f"[LLM_CLIENT] Connecting to proxy: {base_url}")
         return OpenAI(
-            base_url=os.environ["API_BASE_URL"],
-            api_key=os.environ["API_KEY"],
+            base_url=base_url,
+            api_key=api_key,
         )
     except KeyError:
         if require:
@@ -199,17 +209,21 @@ def create_llm_client_from_env(require: bool = False) -> Optional[OpenAI]:
 
 def ask_llm(client: Optional[OpenAI], complaint: str, difficulty: str) -> Optional[Dict[str, Any]]:
     if client is None:
+        print("[LLM_ERROR] No LLM client available.", file=sys.stderr, flush=True)
         return None
 
+    model = get_model_name()
     prompt = (
         f"Complaint: {complaint}\n"
         f"Difficulty: {difficulty}\n"
         "Choose the best department, priority, action, and concise reasoning."
     )
 
+    human_log(f"[LLM_REQUEST] model={model} complaint={complaint[:80]}")
+
     try:
         response = client.chat.completions.create(
-            model=get_model_name(),
+            model=model,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": prompt},
@@ -220,30 +234,44 @@ def ask_llm(client: Optional[OpenAI], complaint: str, difficulty: str) -> Option
             stream=False,
         )
     except Exception as exc:
+        # Surface the real error so it appears in logs
+        print(f"[LLM_ERROR] Request failed: {exc}", file=sys.stderr, flush=True)
         human_log(f"LLM request failed: {exc}")
         return None
 
     content = (response.choices[0].message.content or "").strip()
-    return _extract_json_object(content)
+    human_log(f"[LLM_RESPONSE] {content}")
+
+    result = _extract_json_object(content)
+    if result is None:
+        print(f"[LLM_ERROR] Could not parse JSON from response: {content}", file=sys.stderr, flush=True)
+
+    return result
 
 
 def normalize_decision(complaint: str, proposed: Optional[Dict[str, Any]]) -> Dict[str, str]:
     rule_decision = infer_rule_based_decision(complaint)
+
+    # If LLM returned nothing, fall back to rule-based
     if not isinstance(proposed, dict):
+        human_log("[DECISION] LLM returned no result, using rule-based fallback.")
         return rule_decision
 
-    normalized = {
-        "department": str(proposed.get("department") or rule_decision["department"]).lower(),
-        "priority": str(proposed.get("priority") or rule_decision["priority"]).lower(),
-        "action": str(proposed.get("action") or rule_decision["action"]).lower(),
-        "reasoning": str(proposed.get("reasoning") or rule_decision["reasoning"]),
+    dept = str(proposed.get("department") or "").lower().strip()
+    pri  = str(proposed.get("priority")   or "").lower().strip()
+    act  = str(proposed.get("action")     or "").lower().strip()
+    reasoning = str(proposed.get("reasoning") or rule_decision["reasoning"])
+
+    # Use LLM value if valid, else fall back to rule-based for that field only
+    final = {
+        "department": dept if dept in VALID_DEPARTMENTS else rule_decision["department"],
+        "priority":   pri  if pri  in VALID_PRIORITIES  else rule_decision["priority"],
+        "action":     act  if act  in VALID_ACTIONS      else rule_decision["action"],
+        "reasoning":  reasoning,
     }
 
-    # Clamp to the known environment label space for reproducible scoring.
-    normalized["department"] = rule_decision["department"]
-    normalized["priority"] = rule_decision["priority"]
-    normalized["action"] = rule_decision["action"]
-    return normalized
+    human_log(f"[DECISION] LLM={{'dept': {dept}, 'pri': {pri}, 'act': {act}}} → Final={final}")
+    return final
 
 
 def choose_action(
@@ -315,6 +343,7 @@ async def main() -> None:
             complaint = observation.complaint_text
             difficulty = observation.difficulty or "easy"
             max_rewards.append(target_reward_for_difficulty(difficulty))
+
             action_payload = choose_action(
                 complaint=complaint,
                 difficulty=difficulty,
@@ -351,6 +380,7 @@ async def main() -> None:
                 done=done,
                 error=error,
             )
+
             metadata = getattr(result.observation, "metadata", {}) or {}
             if isinstance(metadata, dict):
                 scored_complaint = metadata.get("scored_complaint", complaint)
@@ -365,7 +395,9 @@ async def main() -> None:
 
             if done:
                 break
+
     except Exception as exc:
+        print(f"[FATAL] {exc}", file=sys.stderr, flush=True)
         human_log(f"Fatal inference error: {exc}")
     finally:
         if rewards:
