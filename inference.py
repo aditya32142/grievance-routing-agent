@@ -54,7 +54,8 @@ SYSTEM_PROMPT = (
 
 
 def get_model_name() -> str:
-    return os.environ.get("MODEL_NAME", "gpt-4o-mini")
+    # FIX 1: reverted to Qwen which is supported by the competition proxy
+    return os.environ.get("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
 
 
 def log_start(task: str, env: str, model: str) -> None:
@@ -234,10 +235,9 @@ def ask_llm(client: Optional[OpenAI], complaint: str, difficulty: str) -> Option
             stream=False,
         )
     except Exception as exc:
-        # Surface the real error so it appears in logs
+        # FIX 2: raise instead of silent fallback so the error is visible
         print(f"[LLM_ERROR] Request failed: {exc}", file=sys.stderr, flush=True)
-        human_log(f"LLM request failed: {exc}")
-        return None
+        raise
 
     content = (response.choices[0].message.content or "").strip()
     human_log(f"[LLM_RESPONSE] {content}")
