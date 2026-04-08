@@ -241,7 +241,7 @@ class InferenceRegressionTests(unittest.TestCase):
         self.assertIn("submitted_action", result.metadata)
 
     def test_create_llm_client_uses_required_proxy_env_vars(self):
-        with patch.dict(os.environ, {"API_BASE_URL": "https://proxy.example/v1", "HF_TOKEN": "proxy-key"}, clear=False):
+        with patch.dict(os.environ, {"API_BASE_URL": "https://proxy.example/v1", "API_KEY": "proxy-key"}, clear=False):
             with patch("inference.OpenAI") as mock_openai:
                 create_llm_client_from_env(require=True)
 
@@ -252,16 +252,27 @@ class InferenceRegressionTests(unittest.TestCase):
 
     def test_create_llm_client_requires_proxy_env_vars_when_requested(self):
         env_without_proxy = dict(os.environ)
+        env_without_proxy.pop("API_KEY", None)
         env_without_proxy.pop("HF_TOKEN", None)
 
         with patch.dict(os.environ, env_without_proxy, clear=True):
             with self.assertRaises(RuntimeError):
                 create_llm_client_from_env(require=True)
 
+    def test_create_llm_client_falls_back_to_hf_token(self):
+        with patch.dict(os.environ, {"API_BASE_URL": "https://proxy.example/v1", "HF_TOKEN": "proxy-key"}, clear=False):
+            with patch("inference.OpenAI") as mock_openai:
+                create_llm_client_from_env(require=True)
+
+        mock_openai.assert_called_once_with(
+            base_url="https://proxy.example/v1",
+            api_key="proxy-key",
+        )
+
     def test_choose_action_builds_client_from_proxy_env_when_missing(self):
         fake_client = MagicMock()
 
-        with patch.dict(os.environ, {"API_BASE_URL": "https://proxy.example/v1", "HF_TOKEN": "proxy-key"}, clear=False):
+        with patch.dict(os.environ, {"API_BASE_URL": "https://proxy.example/v1", "API_KEY": "proxy-key"}, clear=False):
             with patch("inference.create_llm_client_from_env", return_value=fake_client) as mock_create_client:
                 with patch("inference.ask_llm", return_value=None) as mock_ask_llm:
                     choose_action("Streetlight not working near Main Street.")

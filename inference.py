@@ -185,24 +185,21 @@ def _extract_json_object(text: str) -> Optional[Dict[str, Any]]:
 
 
 def create_llm_client_from_env(require: bool = False) -> Optional[OpenAI]:
-    try:
-        base_url = os.getenv("API_BASE_URL", "https://api.openai.com/v1")
-        api_key = os.environ["HF_TOKEN"]
+    base_url = os.getenv("API_BASE_URL", "https://api.openai.com/v1")
+    api_key = os.getenv("API_KEY") or os.getenv("HF_TOKEN")
+
+    if api_key:
         human_log(f"[LLM_CLIENT] Connecting to proxy: {base_url}")
         return OpenAI(
             base_url=base_url,
             api_key=api_key,
         )
-    except KeyError:
-        if require:
-            missing = []
-            if "HF_TOKEN" not in os.environ:
-                missing.append("HF_TOKEN")
-            raise RuntimeError(
-                "Missing required LLM proxy environment variable(s): "
-                + ", ".join(missing)
-            )
-        return None
+
+    if require:
+        raise RuntimeError(
+            "Missing required LLM proxy environment variable(s): API_KEY or HF_TOKEN"
+        )
+    return None
 
 
 def ask_llm(client: Optional[OpenAI], complaint: str, difficulty: str) -> Optional[Dict[str, Any]]:
