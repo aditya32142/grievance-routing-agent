@@ -54,8 +54,7 @@ SYSTEM_PROMPT = (
 
 
 def get_model_name() -> str:
-    # FIX 1: reverted to Qwen which is supported by the competition proxy
-    return os.environ.get("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
+    return os.environ.get("MODEL_NAME", "gpt-4.1-mini")
 
 
 def log_start(task: str, env: str, model: str) -> None:
@@ -187,8 +186,8 @@ def _extract_json_object(text: str) -> Optional[Dict[str, Any]]:
 
 def create_llm_client_from_env(require: bool = False) -> Optional[OpenAI]:
     try:
-        base_url = os.environ["API_BASE_URL"]
-        api_key = os.environ["API_KEY"]
+        base_url = os.getenv("API_BASE_URL", "https://api.openai.com/v1")
+        api_key = os.environ["HF_TOKEN"]
         human_log(f"[LLM_CLIENT] Connecting to proxy: {base_url}")
         return OpenAI(
             base_url=base_url,
@@ -197,10 +196,8 @@ def create_llm_client_from_env(require: bool = False) -> Optional[OpenAI]:
     except KeyError:
         if require:
             missing = []
-            if "API_BASE_URL" not in os.environ:
-                missing.append("API_BASE_URL")
-            if "API_KEY" not in os.environ:
-                missing.append("API_KEY")
+            if "HF_TOKEN" not in os.environ:
+                missing.append("HF_TOKEN")
             raise RuntimeError(
                 "Missing required LLM proxy environment variable(s): "
                 + ", ".join(missing)

@@ -168,7 +168,7 @@ LOCAL_IMAGE_NAME=grievance_routing-env:latest python inference.py
 The included `inference.py`:
 
 - uses the OpenAI client
-- uses the injected `API_BASE_URL` and `API_KEY` proxy variables for LLM calls
+- uses `API_BASE_URL` and `HF_TOKEN` for LLM calls
 - supports `MODEL_NAME` and `LOCAL_IMAGE_NAME`
 - emits validator-friendly `[START]`, `[STEP]`, and `[END]` logs
 - keeps outputs inside the environment label space for reproducible grading
