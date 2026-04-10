@@ -185,9 +185,22 @@ def _extract_json_object(text: str) -> Optional[Dict[str, Any]]:
 
 
 def create_llm_client_from_env(require: bool = False) -> Optional[OpenAI]:
-    # Use exactly the env vars the hackathon validator injects — no defaults, no fallbacks.
-    base_url = os.environ["API_BASE_URL"]
-    api_key  = os.environ["API_KEY"]
+    # Use .get() to avoid KeyError — use API_KEY or fall back to HF_TOKEN
+    base_url = os.environ.get("API_BASE_URL")
+    api_key = os.environ.get("API_KEY") or os.environ.get("HF_TOKEN")
+
+    # Debug: log whether env vars are present
+    print(f"[DEBUG] API_BASE_URL set: {bool(base_url)}", file=sys.stderr, flush=True)
+    print(f"[DEBUG] API_KEY set: {bool(os.environ.get('API_KEY'))}", file=sys.stderr, flush=True)
+    print(f"[DEBUG] HF_TOKEN set: {bool(os.environ.get('HF_TOKEN'))}", file=sys.stderr, flush=True)
+
+    if not base_url or not api_key:
+        if require:
+            raise RuntimeError(
+                "Missing required environment variables: API_BASE_URL and API_KEY (or HF_TOKEN). "
+                "Please set these before running inference."
+            )
+        return None
 
     human_log(f"[LLM_CLIENT] Connecting to proxy: {base_url}")
     return OpenAI(
@@ -198,7 +211,7 @@ def create_llm_client_from_env(require: bool = False) -> Optional[OpenAI]:
 
 def ask_llm(client: Optional[OpenAI], complaint: str, difficulty: str) -> Optional[Dict[str, Any]]:
     if client is None:
-        print("[LLM_ERROR] No LLM client available.", file=sys.stderr, flush=True)
+        print("[LLM_ERROR] No LLM client available — client is None.", file=sys.stderr, flush=True)
         return None
 
     model = get_model_name()
@@ -318,6 +331,7 @@ async def main() -> None:
     log_start(task=TASK_NAME, env=BENCHMARK, model=get_model_name())
 
     try:
+        # This will raise RuntimeError (not KeyError) if env vars are missing
         client = create_llm_client_from_env(require=True)
         env = await create_env()
         result = await env.reset()
